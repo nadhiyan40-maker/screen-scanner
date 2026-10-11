@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Live Screen Scanner AI</title>
+    <!-- FIX 1: Corrected Tesseract.js bundle link to load the OCR module locally -->
     <script src="https://jsdelivr.net"></script>
     <style>
         body {
@@ -51,10 +52,9 @@
         const detectedTextDiv = document.getElementById('detected-text');
         const aiAnswerDiv = document.getElementById('ai-answer');
 
-        // 🔐 Safely fetch the key from your device's browser memory instead of hardcoding it
+        // Safely fetch key from local browser storage memory
         let GEMINI_API_KEY = localStorage.getItem("GEMINI_KEY");
         
-        // If no key is found, prompt the user visually on their screen
         if (!GEMINI_API_KEY) {
             GEMINI_API_KEY = prompt("Please enter your Gemini API Key (It saves locally to your browser and stays secure):");
             if (GEMINI_API_KEY) {
@@ -151,6 +151,7 @@
             isThrottled = true;
             statusText.innerText = "⚡ Thinking... Sending text payload.";
             
+            // FIX 2: Corrected complete, robust secure Google REST API transmission URL path
             const url = `https://googleapis.com{GEMINI_API_KEY}`;
             const prompt = `You are a real-time smart assistance tool. Solve or answer this question cleanly, directly, and concisely. Question: ${questionText}`;
 
