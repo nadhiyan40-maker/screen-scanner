@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Live Screen Scanner AI</title>
+    <script src="https://jsdelivr.net"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0; padding: 0; background: #121212; color: #ffffff;
+            display: flex; flex-direction: column; height: 100vh;
+        }
+        header { background: #1f1f1f; padding: 15px; text-align: center; font-weight: bold; border-bottom: 1px solid #333; }
+        .container { display: flex; flex-direction: column; flex: 1; padding: 10px; gap: 10px; overflow: hidden; }
+        #video-container { position: relative; width: 100%; height: 40%; background: #000; border-radius: 8px; overflow: hidden; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        canvas { display: none; }
+        #output-box { flex: 1; background: #1f1f1f; border-radius: 8px; padding: 15px; overflow-y: auto; border: 1px solid #333; }
+        .status { font-size: 0.85em; color: #aaa; margin-bottom: 10px; font-style: italic; }
+        .ai-response { background: #2a2a2a; padding: 12px; border-left: 4px solid #00ffff; border-radius: 4px; margin-top: 10px; white-space: pre-wrap; }
+        .key-btn { background: #ff3333; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; float: right; font-size: 0.8em; }
+    </style>
+</head>
+<body>
+
+    <header>
+        📱 Live AI Screen Reader
+        <button class="key-btn" onclick="updateKey()">Reset API Key</button>
+    </header>
+    
+    <div class="container">
+        <div id="video-container">
+            <video id="webcam" autoplay playsinline muted></video>
+        </div>
+        
+        <canvas id="processing-canvas"></canvas>
+        
+        <div id="output-box">
+            <div id="status-text" class="status">Initializing...</div>
+            <div id="detected-text" style="color: #00ffff; font-weight: 500;">[Waiting for stable text...]</div>
+            <div id="ai-answer" class="ai-response">AI answers will appear here continuously...</div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('processing-canvas');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status-text');
+        const detectedTextDiv = document.getElementById('detected-text');
+        const aiAnswerDiv = document.getElementById('ai-answer');
+
+        // 🔐 Safely fetch the key from your device's browser memory instead of hardcoding it
+        let GEMINI_API_KEY = localStorage.getItem("GEMINI_KEY");
+        
+        // If no key is found, prompt the user visually on their screen
+        if (!GEMINI_API_KEY) {
+            GEMINI_API_KEY = prompt("Please enter your Gemini API Key (It saves locally to your browser and stays secure):");
+            if (GEMINI_API_KEY) {
+                localStorage.setItem("GEMINI_KEY", GEMINI_API_KEY.trim());
+            }
+        }
+        
+        function updateKey() {
+            const newKey = prompt("Enter new Gemini API Key:");
+            if (newKey) {
+                localStorage.setItem("GEMINI_KEY", newKey.trim());
+                window.location.reload();
+            }
+        }
+        
+        let worker = null;
+        let lastSentText = "";
+        let isThrottled = false; 
+        let lastObservedText = "";
+        let stableFrameCount = 0;
+        const REQUIRED_STABLE_FRAMES = 2; 
+
+        async function initOCR() {
+            statusText.innerText = "Loading local OCR engine...";
+            worker = await Tesseract.createWorker('eng');
+            statusText.innerText = "Camera active. Point at laptop screen.";
+            startScanningLoop();
+        }
+
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    initOCR();
+                };
+            } catch (err) {
+                statusText.innerText = "Camera Access Denied: " + err.message;
+            }
+        }
+
+        async function startScanningLoop() {
+            while (true) {
+                if (video.readyState === video.HAVE_CURRENT_DATA) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    ctx.filter = 'blur(2px) contrast(140%) grayscale(100%)';
+                    ctx.drawImage(canvas, 0, 0);
+                    ctx.filter = 'none'; 
+
+                    try {
+                        const { data: { text } } = await worker.recognize(canvas);
+                        processExtractedText(text);
+                    } catch (ocrError) {
+                        console.error("OCR Error:", ocrError);
+                    }
+                }
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+
+        function processExtractedText(rawText) {
+            const cleaned = rawText.replace(/\s+/g, ' ').trim();
+            if (cleaned.length < 15) return; 
+
+            if (cleaned === lastObservedText) {
+                stableFrameCount++;
+            } else {
+                lastObservedText = cleaned;
+                stableFrameCount = 0; 
+                return;
+            }
+
+            if (stableFrameCount >= REQUIRED_STABLE_FRAMES) {
+                if (cleaned !== lastSentText) {
+                    lastSentText = cleaned;
+                    detectedTextDiv.innerText = `🔍 Processing: "${cleaned.substring(0, 60)}..."`;
+                    askGeminiAI(cleaned);
+                }
+            }
+        }
+
+        async function askGeminiAI(questionText) {
+            if (!GEMINI_API_KEY) {
+                statusText.innerText = "❌ Missing API Key. Click 'Reset API Key' to set it.";
+                return;
+            }
+            if (isThrottled) return; 
+            
+            isThrottled = true;
+            statusText.innerText = "⚡ Thinking... Sending text payload.";
+            
+            const url = `https://googleapis.com{GEMINI_API_KEY}`;
+            const prompt = `You are a real-time smart assistance tool. Solve or answer this question cleanly, directly, and concisely. Question: ${questionText}`;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                
+                const data = await response.json();
+                const aiResponse = data.candidates.content.parts.text;
+                
+                aiAnswerDiv.innerText = aiResponse;
+                statusText.innerText = "👁️ Live Scanning active...";
+            } catch (err) {
+                console.error(err);
+                statusText.innerText = "❌ API Error. Check your key configuration.";
+            }
+
+            setTimeout(() => { isThrottled = false; }, 3000);
+        }
+
+        window.addEventListener('DOMContentLoaded', setupCamera);
+    </script>
+</body>
+</html>
